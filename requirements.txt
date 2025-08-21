@@ -3,3 +3,4 @@ uvicorn[standard]>=0.23.0
 youtube-transcript-api>=0.6.0
 pydantic>=2.8.0
 python-multipart>=0.0.6
+tenacity>=8.0.0
