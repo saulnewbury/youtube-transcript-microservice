@@ -26,12 +26,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Update your TranscriptRequest model in main.py
+
 class TranscriptRequest(BaseModel):
     url: HttpUrl
-    include_timestamps: Optional[bool] = False
-    timestamp_format: Optional[str] = "seconds"
+    include_timestamps: Optional[bool] = True           # Default to True
+    timestamp_format: Optional[str] = "minutes"        # Default to minutes
+    grouping_strategy: Optional[str] = "smart"         # Default to smart
+    min_interval: Optional[int] = 10                   # Default to 10 seconds
     include_metadata: Optional[bool] = True
     force_fallback: Optional[bool] = False
+
+
 
 class TranscriptSegment(BaseModel):
     text: str
@@ -421,7 +427,11 @@ async def get_transcript(request: TranscriptRequest):
         
         # Process transcript efficiently
         final_text, segments, total_duration = process_transcript_segments(
-            transcript_data, request.include_timestamps, request.timestamp_format or "seconds"
+            transcript_data, 
+            request.include_timestamps, 
+            request.timestamp_format or "minutes",
+            request.grouping_strategy or "smart",
+            request.min_interval or 10
         )
         
         if not final_text:
