@@ -168,11 +168,197 @@ def get_video_metadata(video_id: str, session: requests.Session) -> dict:
 
 # Assume process_transcript_segments is defined elsewhere in your code (from the truncated part)
 # For completeness, I'll stub it if not present, but use your original.
-def process_transcript_segments(transcript_data, include_timestamps, timestamp_format):
-    # Stub: Implement based on your original logic
-    final_text = " ".join([seg['text'] for seg in transcript_data])
-    segments = []  # Process as needed
-    total_duration = sum([seg['duration'] for seg in transcript_data])
+# Add this function to your main.py file
+
+def process_transcript_segments(transcript_data, include_timestamps, timestamp_format, grouping_strategy="smart", min_interval=10):
+    """
+    Process transcript segments with intelligent grouping
+    
+    Args:
+        grouping_strategy: 
+            - "time": Fixed time intervals (original approach)
+            - "smart": Respect sentence boundaries and natural pauses (recommended)
+            - "sentence": Group by complete sentences/thoughts
+        min_interval: Minimum seconds between timestamps (prevents too many timestamps)
+    """
+    
+    def format_timestamp(seconds, format_type="seconds"):
+        if format_type == "seconds":
+            return f"[{seconds:.1f}s]"
+        elif format_type == "minutes":
+            minutes = int(seconds // 60)
+            secs = int(seconds % 60)
+            return f"[{minutes}:{secs:02d}]"
+        elif format_type == "hms":
+            hours = int(seconds // 3600)
+            minutes = int((seconds % 3600) // 60)
+            secs = int(seconds % 60)
+            if hours > 0:
+                return f"[{hours}:{minutes:02d}:{secs:02d}]"
+            else:
+                return f"[{minutes}:{secs:02d}]"
+        else:
+            return f"[{seconds:.1f}s]"
+    
+    def is_sentence_end(text):
+        """Check if text ends with sentence-ending punctuation or pause indicators"""
+        text = text.strip()
+        return (text.endswith(('.', '!', '?', '...')) or 
+                text.endswith((',')) or  # Sometimes commas indicate pauses
+                len(text.split()) >= 8)  # Long segments often end thoughts
+    
+    def has_natural_pause(current_end, next_start, threshold=0.5):
+        """Check if there's a natural pause between segments"""
+        return (next_start - current_end) > threshold
+    
+    segments = []
+    text_parts = []
+    total_duration = 0
+    
+    if include_timestamps and grouping_strategy in ["smart", "sentence"]:
+        current_group_start = None
+        current_group_texts = []
+        last_timestamp_time = -min_interval  # Allow first timestamp immediately
+        
+        for i, segment in enumerate(transcript_data):
+            start_time = segment.get('start', 0)
+            duration = segment.get('duration', 0)
+            text = segment.get('text', '').strip()
+            end_time = start_time + duration
+            
+            total_duration = max(total_duration, end_time)
+            
+            # Start new group if needed
+            if current_group_start is None:
+                current_group_start = start_time
+                current_group_texts = [text]
+            else:
+                current_group_texts.append(text)
+            
+            # Check if we should end this group
+            should_end_group = False
+            
+            if grouping_strategy == "smart":
+                # End group if:
+                # 1. Sentence ends AND enough time has passed
+                # 2. There's a natural pause to the next segment
+                # 3. We've hit a reasonable time limit (prevent super long groups)
+                time_since_last = start_time - last_timestamp_time
+                next_segment = transcript_data[i + 1] if i + 1 < len(transcript_data) else None
+                
+                if (is_sentence_end(text) and time_since_last >= min_interval):
+                    should_end_group = True
+                elif (next_segment and has_natural_pause(end_time, next_segment.get('start', 0))):
+                    should_end_group = True
+                elif (start_time - current_group_start) > 25:  # Max 25 seconds per group
+                    should_end_group = True
+                    
+            elif grouping_strategy == "sentence":
+                # End group only at clear sentence boundaries
+                if is_sentence_end(text) and (start_time - last_timestamp_time) >= min_interval:
+                    should_end_group = True
+            
+            # Create individual segment for metadata
+            processed_segment = {
+                'text': text,
+                'start': start_time,
+                'duration': duration,
+                'end': end_time,
+                'timestamp': format_timestamp(start_time, timestamp_format)
+            }
+            segments.append(processed_segment)
+            
+            # End the group if conditions are met
+            if should_end_group or i == len(transcript_data) - 1:  # Last segment
+                timestamp_str = format_timestamp(current_group_start, timestamp_format)
+                grouped_text = " ".join(current_group_texts)
+                text_parts.append(f"{timestamp_str} {grouped_text}")
+                
+                last_timestamp_time = current_group_start
+                current_group_start = None
+                current_group_texts = []
+                
+    elif include_timestamps and grouping_strategy == "time":
+        # Original time-based approach (keeping for backwards compatibility)
+        timestamp_interval = min_interval
+        current_group_start = 0
+        current_group_texts = []
+        
+        for segment in transcript_data:
+            start_time = segment.get('start', 0)
+            duration = segment.get('duration', 0)
+            text = segment.get('text', '').strip()
+            end_time = start_time + duration
+            
+            total_duration = max(total_duration, end_time)
+            
+            if start_time >= current_group_start + timestamp_interval:
+                if current_group_texts:
+                    timestamp_str = format_timestamp(current_group_start, timestamp_format)
+                    grouped_text = " ".join(current_group_texts)
+                    text_parts.append(f"{timestamp_str} {grouped_text}")
+                
+                current_group_start = (start_time // timestamp_interval) * timestamp_interval
+                current_group_texts = [text]
+            else:
+                current_group_texts.append(text)
+            
+            processed_segment = {
+                'text': text,
+                'start': start_time,
+                'duration': duration,
+                'end': end_time,
+                'timestamp': format_timestamp(start_time, timestamp_format)
+            }
+            segments.append(processed_segment)
+        
+        if current_group_texts:
+            timestamp_str = format_timestamp(current_group_start, timestamp_format)
+            grouped_text = " ".join(current_group_texts)
+            text_parts.append(f"{timestamp_str} {grouped_text}")
+            
+    elif include_timestamps:
+        # Every segment (original behavior)
+        for segment in transcript_data:
+            start_time = segment.get('start', 0)
+            duration = segment.get('duration', 0)
+            text = segment.get('text', '').strip()
+            end_time = start_time + duration
+            
+            total_duration = max(total_duration, end_time)
+            
+            processed_segment = {
+                'text': text,
+                'start': start_time,
+                'duration': duration,
+                'end': end_time,
+                'timestamp': format_timestamp(start_time, timestamp_format)
+            }
+            segments.append(processed_segment)
+            
+            timestamp_str = format_timestamp(start_time, timestamp_format)
+            text_parts.append(f"{timestamp_str} {text}")
+    else:
+        # No timestamps
+        for segment in transcript_data:
+            start_time = segment.get('start', 0)
+            duration = segment.get('duration', 0)
+            text = segment.get('text', '').strip()
+            end_time = start_time + duration
+            
+            total_duration = max(total_duration, end_time)
+            
+            processed_segment = {
+                'text': text,
+                'start': start_time,
+                'duration': duration,
+                'end': end_time,
+                'timestamp': format_timestamp(start_time, timestamp_format)
+            }
+            segments.append(processed_segment)
+            text_parts.append(text)
+    
+    final_text = " ".join(text_parts)
     return final_text, segments, total_duration
 
 @app.post("/transcript")
