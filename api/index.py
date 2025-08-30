@@ -6,6 +6,9 @@ import re
 import requests
 from youtube_transcript_api import YouTubeTranscriptApi
 
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
+
 app = FastAPI(title="YouTube Transcript API", version="1.0.0")
 
 class TranscriptRequest(BaseModel):
