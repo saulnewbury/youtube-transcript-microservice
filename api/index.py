@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
 from youtube_transcript_api import YouTubeTranscriptApi
 import re
-import uvicorn
 import requests
 from typing import Optional, List
 import logging
@@ -65,30 +64,10 @@ CACHE_FILE = 'transcript_cache.db'
 CACHE_EXPIRY_SECONDS = 30 * 24 * 60 * 60  # 30 days
 
 def get_cached_transcript(video_id: str) -> Optional[dict]:
-    try:
-        with shelve.open(CACHE_FILE) as cache:
-            if video_id in cache:
-                cached_data = cache[video_id]
-                if time.time() - cached_data['timestamp'] < CACHE_EXPIRY_SECONDS:
-                    logger.info(f"Cache hit for video_id: {video_id}")
-                    return cached_data['data']
-                else:
-                    logger.info(f"Cache expired for video_id: {video_id}")
-                    del cache[video_id]
-    except Exception as e:
-        logger.error(f"Cache read error for {video_id}: {str(e)}")
-    return None
+    return None  # Just return None instead of checking cache
 
 def cache_transcript(video_id: str, data: dict):
-    try:
-        with shelve.open(CACHE_FILE) as cache:
-            cache[video_id] = {
-                'timestamp': time.time(),
-                'data': data
-            }
-        logger.info(f"Cached transcript for video_id: {video_id}")
-    except Exception as e:
-        logger.error(f"Cache write error for {video_id}: {str(e)}")
+    pass  # Do nothing instead of saving to cache
 
 def extract_video_id(url: str) -> tuple[str, bool]:
     """Extract video ID from YouTube URL and detect if it's a Short"""
@@ -469,11 +448,3 @@ async def get_transcript(request: TranscriptRequest):
 
 # Your other endpoints (get_transcript_by_id, get_shorts_transcript_by_id) remain the same, as they call get_transcript
 
-if __name__ == "__main__":
-    uvicorn.run(
-        "main:app", 
-        host="0.0.0.0", 
-        port=8001, 
-        reload=True,
-        log_level="info"
-    )
