@@ -448,3 +448,4 @@ async def get_transcript(request: TranscriptRequest):
 
 # Your other endpoints (get_transcript_by_id, get_shorts_transcript_by_id) remain the same, as they call get_transcript
 
+handler = app
