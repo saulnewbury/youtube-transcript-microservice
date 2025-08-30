@@ -82,6 +82,14 @@ def extract_video_id(url: str) -> tuple[str, bool]:
 
 def create_session():
     session = requests.Session()
+    
+    # Use Webshare proxy
+    proxy_url = "http://yirmygvp:760s1izruzdz@23.95.150.145:6114/"
+    session.proxies = {
+        'http': proxy_url,
+        'https': proxy_url
+    }
+    
     session.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         'Accept-Language': 'en-US,en;q=0.9',
