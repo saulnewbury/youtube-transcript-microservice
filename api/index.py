@@ -1,25 +1,3 @@
-import os
-import random
-
-# Set up all your Webshare proxies
-WEBSHARE_PROXIES = [
-    "http://yirmygvp:760s1izruzdz@23.95.150.145:6114/",
-    "http://yirmygvp:760s1izruzdz@198.23.239.134:6540/",
-    "http://yirmygvp:760s1izruzdz@45.38.107.97:6014/",
-    "http://yirmygvp:760s1izruzdz@107.172.163.27:6543/",
-    "http://yirmygvp:760s1izruzdz@64.137.96.74:6641/",
-    "http://yirmygvp:760s1izruzdz@45.43.186.39:6257/",
-    "http://yirmygvp:760s1izruzdz@154.203.43.247:5536/",
-    "http://yirmygvp:760s1izruzdz@216.10.27.159:6837/",
-    "http://yirmygvp:760s1izruzdz@136.0.207.84:6661/",
-    "http://yirmygvp:760s1izruzdz@142.147.128.93:6593/"
-]
-
-# Set system-wide proxy (rotate randomly)
-selected_proxy = random.choice(WEBSHARE_PROXIES)
-os.environ['HTTP_PROXY'] = selected_proxy
-os.environ['HTTPS_PROXY'] = selected_proxy
-
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
@@ -28,6 +6,7 @@ import logging
 import re
 import requests
 from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api.proxies import WebshareProxyConfig
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -104,15 +83,6 @@ def extract_video_id(url: str) -> tuple[str, bool]:
 
 def create_session():
     session = requests.Session()
-    
-    # Use the same proxy that was set in environment variables
-    proxy_url = os.environ.get('HTTP_PROXY')
-    if proxy_url:
-        session.proxies = {
-            'http': proxy_url,
-            'https': proxy_url
-        }
-        logger.info(f"Using proxy: {proxy_url[:30]}...")  # Log partial proxy URL
     
     session.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
@@ -372,11 +342,17 @@ async def get_transcript(request: TranscriptRequest):
         # Fetch metadata
         metadata = get_video_metadata(video_id, session)
         
-        # Get transcript
+        # Get transcript using WebshareProxyConfig
         def fetch_transcript():
             try:
-                # Instantiate the API with the custom session (http_client parameter)
-                ytt_api = YouTubeTranscriptApi(http_client=session)
+                # Create WebshareProxyConfig with your credentials
+                proxy_config = WebshareProxyConfig(
+                    proxy_username="yirmygvp-rotate",  # Add -rotate suffix
+                    proxy_password="760s1izruzdz",
+                )
+                
+                # Initialize the API with proxy config
+                ytt_api = YouTubeTranscriptApi(proxy_config=proxy_config)
                 
                 # List available transcripts
                 transcript_list = ytt_api.list(video_id)
