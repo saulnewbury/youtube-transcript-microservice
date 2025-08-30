@@ -1,12 +1,15 @@
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, HttpUrl
 from typing import Optional, List
 import logging
 import re
 import requests
+import shelve
+import time
+import json
 from youtube_transcript_api import YouTubeTranscriptApi
 
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 
 app = FastAPI(title="YouTube Transcript API", version="1.0.0")
