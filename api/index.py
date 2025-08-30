@@ -1,11 +1,17 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, HttpUrl
+from typing import Optional
+import logging
 
-app = FastAPI()
+app = FastAPI(title="YouTube Transcript API", version="1.0.0")
+
+class TranscriptRequest(BaseModel):
+    url: HttpUrl
 
 @app.get("/")
 def read_root():
-    return {"message": "Hello World"}
+    return {"message": "YouTube Transcript API"}
 
-@app.get("/health")  
-def health_check():
-    return {"status": "healthy"}
+@app.post("/transcript")
+async def get_transcript(request: TranscriptRequest):
+    return {"message": f"Would process: {request.url}"}
