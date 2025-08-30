@@ -1,3 +1,25 @@
+import os
+import random
+
+# Set up all your Webshare proxies
+WEBSHARE_PROXIES = [
+    "http://yirmygvp:760s1izruzdz@23.95.150.145:6114/",
+    "http://yirmygvp:760s1izruzdz@198.23.239.134:6540/",
+    "http://yirmygvp:760s1izruzdz@45.38.107.97:6014/",
+    "http://yirmygvp:760s1izruzdz@107.172.163.27:6543/",
+    "http://yirmygvp:760s1izruzdz@64.137.96.74:6641/",
+    "http://yirmygvp:760s1izruzdz@45.43.186.39:6257/",
+    "http://yirmygvp:760s1izruzdz@154.203.43.247:5536/",
+    "http://yirmygvp:760s1izruzdz@216.10.27.159:6837/",
+    "http://yirmygvp:760s1izruzdz@136.0.207.84:6661/",
+    "http://yirmygvp:760s1izruzdz@142.147.128.93:6593/"
+]
+
+# Set system-wide proxy (rotate randomly)
+selected_proxy = random.choice(WEBSHARE_PROXIES)
+os.environ['HTTP_PROXY'] = selected_proxy
+os.environ['HTTPS_PROXY'] = selected_proxy
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
@@ -83,12 +105,14 @@ def extract_video_id(url: str) -> tuple[str, bool]:
 def create_session():
     session = requests.Session()
     
-    # Use Webshare proxy
-    proxy_url = "http://yirmygvp:760s1izruzdz@23.95.150.145:6114/"
-    session.proxies = {
-        'http': proxy_url,
-        'https': proxy_url
-    }
+    # Use the same proxy that was set in environment variables
+    proxy_url = os.environ.get('HTTP_PROXY')
+    if proxy_url:
+        session.proxies = {
+            'http': proxy_url,
+            'https': proxy_url
+        }
+        logger.info(f"Using proxy: {proxy_url[:30]}...")  # Log partial proxy URL
     
     session.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
@@ -101,6 +125,13 @@ def create_session():
 def get_video_metadata(video_id: str, session: requests.Session) -> dict:
     """Get video metadata including title and check if it's a Short"""
     try:
+        # Test what IP we're using
+        try:
+            ip_check = session.get("https://httpbin.org/ip", timeout=5)
+            logger.info(f"Current IP: {ip_check.text}")
+        except:
+            logger.info("Could not check IP")
+        
         url = f"https://www.youtube.com/watch?v={video_id}"
         response = session.get(url, timeout=10)
         logger.info(f"Metadata fetch for {video_id} - Status: {response.status_code}")
