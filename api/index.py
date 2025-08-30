@@ -5,6 +5,8 @@ from typing import Optional, List
 import logging
 import re
 import requests
+import json
+import time
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.proxies import WebshareProxyConfig
 
@@ -16,7 +18,7 @@ app = FastAPI(title="YouTube Transcript API with Shorts Support", version="1.1.0
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://your-domain.com"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -24,10 +26,10 @@ app.add_middleware(
 
 class TranscriptRequest(BaseModel):
     url: HttpUrl
-    include_timestamps: Optional[bool] = True           # Default to True
-    timestamp_format: Optional[str] = "minutes"        # Default to minutes
-    grouping_strategy: Optional[str] = "smart"         # Default to smart
-    min_interval: Optional[int] = 10                   # Default to 10 seconds
+    include_timestamps: Optional[bool] = True
+    timestamp_format: Optional[str] = "minutes"
+    grouping_strategy: Optional[str] = "smart"
+    min_interval: Optional[int] = 10
     include_metadata: Optional[bool] = True
     force_fallback: Optional[bool] = False
 
@@ -83,7 +85,6 @@ def extract_video_id(url: str) -> tuple[str, bool]:
 
 def create_session():
     session = requests.Session()
-    
     session.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         'Accept-Language': 'en-US,en;q=0.9',
@@ -95,19 +96,12 @@ def create_session():
 def get_video_metadata(video_id: str, session: requests.Session) -> dict:
     """Get video metadata including title and check if it's a Short"""
     try:
-        # Test what IP we're using
-        try:
-            ip_check = session.get("https://httpbin.org/ip", timeout=5)
-            logger.info(f"Current IP: {ip_check.text}")
-        except:
-            logger.info("Could not check IP")
-        
         url = f"https://www.youtube.com/watch?v={video_id}"
         response = session.get(url, timeout=10)
         logger.info(f"Metadata fetch for {video_id} - Status: {response.status_code}")
         
         if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail="Failed to fetch metadata")
+            return {'title': 'YouTube Video', 'is_shorts': False, 'duration': 0}
         
         content = response.text
         
@@ -134,19 +128,10 @@ def get_video_metadata(video_id: str, session: requests.Session) -> dict:
         }
     except Exception as e:
         logger.error(f"Metadata error for {video_id}: {str(e)}")
-        raise
+        return {'title': 'YouTube Video', 'is_shorts': False, 'duration': 0}
 
 def process_transcript_segments(transcript_data, include_timestamps, timestamp_format, grouping_strategy="smart", min_interval=10):
-    """
-    Process transcript segments with intelligent grouping
-    
-    Args:
-        grouping_strategy: 
-            - "time": Fixed time intervals (original approach)
-            - "smart": Respect sentence boundaries and natural pauses (recommended)
-            - "sentence": Group by complete sentences/thoughts
-        min_interval: Minimum seconds between timestamps (prevents too many timestamps)
-    """
+    """Process transcript segments with intelligent grouping"""
     
     def format_timestamp(seconds, format_type="seconds"):
         if format_type == "seconds":
@@ -170,8 +155,8 @@ def process_transcript_segments(transcript_data, include_timestamps, timestamp_f
         """Check if text ends with sentence-ending punctuation or pause indicators"""
         text = text.strip()
         return (text.endswith(('.', '!', '?', '...')) or 
-                text.endswith((',')) or  # Sometimes commas indicate pauses
-                len(text.split()) >= 8)  # Long segments often end thoughts
+                text.endswith((',')) or
+                len(text.split()) >= 8)
     
     def has_natural_pause(current_end, next_start, threshold=0.5):
         """Check if there's a natural pause between segments"""
@@ -184,7 +169,7 @@ def process_transcript_segments(transcript_data, include_timestamps, timestamp_f
     if include_timestamps and grouping_strategy in ["smart", "sentence"]:
         current_group_start = None
         current_group_texts = []
-        last_timestamp_time = -min_interval  # Allow first timestamp immediately
+        last_timestamp_time = -min_interval
         
         for i, segment in enumerate(transcript_data):
             start_time = segment.get('start', 0)
@@ -194,21 +179,15 @@ def process_transcript_segments(transcript_data, include_timestamps, timestamp_f
             
             total_duration = max(total_duration, end_time)
             
-            # Start new group if needed
             if current_group_start is None:
                 current_group_start = start_time
                 current_group_texts = [text]
             else:
                 current_group_texts.append(text)
             
-            # Check if we should end this group
             should_end_group = False
             
             if grouping_strategy == "smart":
-                # End group if:
-                # 1. Sentence ends AND enough time has passed
-                # 2. There's a natural pause to the next segment
-                # 3. We've hit a reasonable time limit (prevent super long groups)
                 time_since_last = start_time - last_timestamp_time
                 next_segment = transcript_data[i + 1] if i + 1 < len(transcript_data) else None
                 
@@ -216,15 +195,13 @@ def process_transcript_segments(transcript_data, include_timestamps, timestamp_f
                     should_end_group = True
                 elif (next_segment and has_natural_pause(end_time, next_segment.get('start', 0))):
                     should_end_group = True
-                elif (start_time - current_group_start) > 25:  # Max 25 seconds per group
+                elif (start_time - current_group_start) > 25:
                     should_end_group = True
                     
             elif grouping_strategy == "sentence":
-                # End group only at clear sentence boundaries
                 if is_sentence_end(text) and (start_time - last_timestamp_time) >= min_interval:
                     should_end_group = True
             
-            # Create individual segment for metadata
             processed_segment = {
                 'text': text,
                 'start': start_time,
@@ -234,8 +211,7 @@ def process_transcript_segments(transcript_data, include_timestamps, timestamp_f
             }
             segments.append(processed_segment)
             
-            # End the group if conditions are met
-            if should_end_group or i == len(transcript_data) - 1:  # Last segment
+            if should_end_group or i == len(transcript_data) - 1:
                 timestamp_str = format_timestamp(current_group_start, timestamp_format)
                 grouped_text = " ".join(current_group_texts)
                 text_parts.append(f"{timestamp_str} {grouped_text}")
@@ -244,47 +220,7 @@ def process_transcript_segments(transcript_data, include_timestamps, timestamp_f
                 current_group_start = None
                 current_group_texts = []
                 
-    elif include_timestamps and grouping_strategy == "time":
-        # Original time-based approach (keeping for backwards compatibility)
-        timestamp_interval = min_interval
-        current_group_start = 0
-        current_group_texts = []
-        
-        for segment in transcript_data:
-            start_time = segment.get('start', 0)
-            duration = segment.get('duration', 0)
-            text = segment.get('text', '').strip()
-            end_time = start_time + duration
-            
-            total_duration = max(total_duration, end_time)
-            
-            if start_time >= current_group_start + timestamp_interval:
-                if current_group_texts:
-                    timestamp_str = format_timestamp(current_group_start, timestamp_format)
-                    grouped_text = " ".join(current_group_texts)
-                    text_parts.append(f"{timestamp_str} {grouped_text}")
-                
-                current_group_start = (start_time // timestamp_interval) * timestamp_interval
-                current_group_texts = [text]
-            else:
-                current_group_texts.append(text)
-            
-            processed_segment = {
-                'text': text,
-                'start': start_time,
-                'duration': duration,
-                'end': end_time,
-                'timestamp': format_timestamp(start_time, timestamp_format)
-            }
-            segments.append(processed_segment)
-        
-        if current_group_texts:
-            timestamp_str = format_timestamp(current_group_start, timestamp_format)
-            grouped_text = " ".join(current_group_texts)
-            text_parts.append(f"{timestamp_str} {grouped_text}")
-            
     elif include_timestamps:
-        # Every segment (original behavior)
         for segment in transcript_data:
             start_time = segment.get('start', 0)
             duration = segment.get('duration', 0)
@@ -305,7 +241,6 @@ def process_transcript_segments(transcript_data, include_timestamps, timestamp_f
             timestamp_str = format_timestamp(start_time, timestamp_format)
             text_parts.append(f"{timestamp_str} {text}")
     else:
-        # No timestamps
         for segment in transcript_data:
             start_time = segment.get('start', 0)
             duration = segment.get('duration', 0)
@@ -339,15 +274,15 @@ async def get_transcript(request: TranscriptRequest):
         
         session = create_session()
         
-        # Fetch metadata
+        # Fetch metadata (non-blocking if it fails)
         metadata = get_video_metadata(video_id, session)
         
         # Get transcript using WebshareProxyConfig
         def fetch_transcript():
             try:
-                # Create WebshareProxyConfig with your credentials
+                # Create WebshareProxyConfig with rotating credentials
                 proxy_config = WebshareProxyConfig(
-                    proxy_username="yirmygvp-rotate",  # Add -rotate suffix
+                    proxy_username="yirmygvp-rotate",
                     proxy_password="760s1izruzdz",
                 )
                 
@@ -362,8 +297,11 @@ async def get_transcript(request: TranscriptRequest):
                     transcript = transcript_list.find_generated_transcript(['en'])
                     transcript_source = "generated"
                 except:
-                    transcript = transcript_list.find_manually_created_transcript(['en'])
-                    transcript_source = "manual"
+                    try:
+                        transcript = transcript_list.find_manually_created_transcript(['en'])
+                        transcript_source = "manual"
+                    except:
+                        raise HTTPException(status_code=404, detail="No English transcript available")
                 
                 # Fetch the transcript object
                 fetched_transcript = transcript.fetch()
@@ -372,20 +310,20 @@ async def get_transcript(request: TranscriptRequest):
                 language_code = fetched_transcript.language_code
                 is_generated = fetched_transcript.is_generated
                 
-                # Convert to list of dicts for compatibility with your processing logic
+                # Convert to list of dicts for compatibility
                 transcript_data = fetched_transcript.to_raw_data()
                 
                 return transcript_data, language_code, is_generated, transcript_source
             except Exception as e:
                 logger.error(f"Transcript fetch error for {video_id}: {str(e)}")
-                raise
+                raise HTTPException(status_code=500, detail=f"Transcript fetch failed: {str(e)}")
         
         transcript_data, language_code, is_generated, transcript_source = fetch_transcript()
         
         if not transcript_data:
             raise HTTPException(status_code=404, detail="No transcript data received.")
         
-        # Process transcript efficiently
+        # Process transcript
         final_text, segments, total_duration = process_transcript_segments(
             transcript_data, 
             request.include_timestamps, 
