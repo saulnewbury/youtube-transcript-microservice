@@ -21,6 +21,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Global connection pool - this is the key addition
+class TranscriptSessionPool:
+    def __init__(self):
+        self.proxy_config = WebshareProxyConfig(
+            proxy_username="yirmygvp-rotate",
+            proxy_password="760s1izruzdz",
+        )
+        self.ytt_api = YouTubeTranscriptApi(proxy_config=self.proxy_config)
+        logger.info("Initialized persistent transcript session pool")
+    
+    def get_api(self):
+        return self.ytt_api
+
+# Create global instance at startup
+transcript_pool = TranscriptSessionPool()
+
 class TranscriptRequest(BaseModel):
     url: HttpUrl
     include_timestamps: Optional[bool] = True
@@ -222,17 +238,11 @@ async def get_transcript(request: TranscriptRequest):
         video_id, is_shorts = extract_video_id(str(request.url))
         logger.info(f"Processing request for video_id: {video_id}, is_shorts: {is_shorts}")
         
-        # Get transcript using WebshareProxyConfig - skip metadata fetch entirely
+        # Use the persistent session instead of creating new one each time
         def fetch_transcript():
             try:
-                # Create WebshareProxyConfig with rotating credentials
-                proxy_config = WebshareProxyConfig(
-                    proxy_username="yirmygvp-rotate",
-                    proxy_password="760s1izruzdz",
-                )
-                
-                # Initialize the API with proxy config
-                ytt_api = YouTubeTranscriptApi(proxy_config=proxy_config)
+                # Use the global session pool instead of creating new API instance
+                ytt_api = transcript_pool.get_api()
                 
                 # List available transcripts
                 transcript_list = ytt_api.list(video_id)
@@ -287,13 +297,13 @@ async def get_transcript(request: TranscriptRequest):
             "segments": segments if request.include_timestamps else None,
             "status": "completed",
             "video_id": video_id,
-            "video_title": "YouTube Video",  # Generic title since metadata service already has the real title
+            "video_title": "YouTube Video",
             "language_code": language_code,
             "is_generated": is_generated,
             "service": "youtube_transcript_api",
             "total_segments": len(segments) if segments else len(transcript_data),
             "total_duration": total_duration,
-            "is_shorts": is_shorts,  # From URL pattern detection only
+            "is_shorts": is_shorts,
             "transcript_source": transcript_source
         }
         
@@ -306,3 +316,12 @@ async def get_transcript(request: TranscriptRequest):
     except Exception as e:
         logger.error(f"Unexpected error for {video_id if 'video_id' in locals() else 'unknown'}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
+
+# Optional: Add endpoint to check connection pool health
+@app.get("/health")
+def health_check():
+    return {
+        "status": "healthy",
+        "service": "youtube_transcript_api",
+        "connection_pool": "active"
+    }
