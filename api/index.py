@@ -4,9 +4,6 @@ from pydantic import BaseModel, HttpUrl
 from typing import Optional, List
 import logging
 import re
-import requests
-import json
-import time
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.proxies import WebshareProxyConfig
 
@@ -82,53 +79,6 @@ def extract_video_id(url: str) -> tuple[str, bool]:
             return match.group(1), False
     
     raise ValueError("Could not extract video ID from URL")
-
-def create_session():
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Connection': 'keep-alive'
-    })
-    return session
-
-def get_video_metadata(video_id: str, session: requests.Session) -> dict:
-    """Get video metadata including title and check if it's a Short"""
-    try:
-        url = f"https://www.youtube.com/watch?v={video_id}"
-        response = session.get(url, timeout=10)
-        logger.info(f"Metadata fetch for {video_id} - Status: {response.status_code}")
-        
-        if response.status_code != 200:
-            return {'title': 'YouTube Video', 'is_shorts': False, 'duration': 0}
-        
-        content = response.text
-        
-        # Extract title
-        title_match = re.search(r'<title>(.*?) - YouTube</title>', content)
-        title = title_match.group(1).strip() if title_match else "YouTube Video"
-        
-        # Check if it's a Short by looking for specific indicators
-        is_shorts = any(indicator in content.lower() for indicator in [
-            '"isshort":true',
-            '"isshorts":true', 
-            'shorts',
-            '"videotype":"short"'
-        ])
-        
-        # Try to get duration from page data
-        duration_match = re.search(r'"lengthSeconds":"(\d+)"', content)
-        duration = int(duration_match.group(1)) if duration_match else 0
-        
-        return {
-            'title': title,
-            'is_shorts': is_shorts,
-            'duration': duration
-        }
-    except Exception as e:
-        logger.error(f"Metadata error for {video_id}: {str(e)}")
-        return {'title': 'YouTube Video', 'is_shorts': False, 'duration': 0}
 
 def process_transcript_segments(transcript_data, include_timestamps, timestamp_format, grouping_strategy="smart", min_interval=10):
     """Process transcript segments with intelligent grouping"""
@@ -272,12 +222,7 @@ async def get_transcript(request: TranscriptRequest):
         video_id, is_shorts = extract_video_id(str(request.url))
         logger.info(f"Processing request for video_id: {video_id}, is_shorts: {is_shorts}")
         
-        session = create_session()
-        
-        # Fetch metadata (non-blocking if it fails)
-        metadata = get_video_metadata(video_id, session)
-        
-        # Get transcript using WebshareProxyConfig
+        # Get transcript using WebshareProxyConfig - skip metadata fetch entirely
         def fetch_transcript():
             try:
                 # Create WebshareProxyConfig with rotating credentials
@@ -342,13 +287,13 @@ async def get_transcript(request: TranscriptRequest):
             "segments": segments if request.include_timestamps else None,
             "status": "completed",
             "video_id": video_id,
-            "video_title": metadata.get('title', 'YouTube Video'),
+            "video_title": "YouTube Video",  # Generic title since metadata service already has the real title
             "language_code": language_code,
             "is_generated": is_generated,
             "service": "youtube_transcript_api",
             "total_segments": len(segments) if segments else len(transcript_data),
-            "total_duration": total_duration or metadata.get('duration', 0),
-            "is_shorts": metadata.get('is_shorts', is_shorts),
+            "total_duration": total_duration,
+            "is_shorts": is_shorts,  # From URL pattern detection only
             "transcript_source": transcript_source
         }
         
