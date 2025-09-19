@@ -4,13 +4,14 @@ from pydantic import BaseModel, HttpUrl
 from typing import Optional, List
 import logging
 import re
-from .youtube_web_scraper import fetch_transcript_web_scraping  # NEW IMPORT
+from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api.proxies import WebshareProxyConfig
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="YouTube Transcript API with Web Scraping", version="2.0.0")
+app = FastAPI(title="YouTube Transcript API with Shorts Support", version="1.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -20,6 +21,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Global connection pool - this is the key addition
+class TranscriptSessionPool:
+    def __init__(self):
+        self.proxy_config = WebshareProxyConfig(
+            proxy_username="yirmygvp-rotate",
+            proxy_password="760s1izruzdz",
+        )
+        self.ytt_api = YouTubeTranscriptApi(proxy_config=self.proxy_config)
+        logger.info("Initialized persistent transcript session pool")
+    
+    def get_api(self):
+        return self.ytt_api
+
+# Create global instance at startup
+transcript_pool = TranscriptSessionPool()
+
 class TranscriptRequest(BaseModel):
     url: HttpUrl
     include_timestamps: Optional[bool] = True
@@ -27,7 +44,7 @@ class TranscriptRequest(BaseModel):
     grouping_strategy: Optional[str] = "smart"
     min_interval: Optional[int] = 10
     include_metadata: Optional[bool] = True
-    use_scraping: Optional[bool] = True  # NEW: Option to toggle between methods
+    force_fallback: Optional[bool] = False
 
 class TranscriptSegment(BaseModel):
     text: str
@@ -44,11 +61,11 @@ class TranscriptResponse(BaseModel):
     video_title: Optional[str] = None
     language_code: str
     is_generated: bool
-    service: str = "web_scraping"
+    service: str = "youtube_transcript_api"
     total_segments: int
     total_duration: float
     is_shorts: bool = False
-    transcript_source: str = "web_scraping"
+    transcript_source: str = "direct"
 
 def extract_video_id(url: str) -> tuple[str, bool]:
     """Extract video ID from YouTube URL and detect if it's a Short"""
@@ -213,25 +230,45 @@ def process_transcript_segments(transcript_data, include_timestamps, timestamp_f
 
 @app.get("/")
 def read_root():
-    return {"message": "YouTube Transcript API with Web Scraping"}
+    return {"message": "YouTube Transcript API"}
 
 @app.post("/transcript")
 async def get_transcript(request: TranscriptRequest):
     try:
         video_id, is_shorts = extract_video_id(str(request.url))
-        logger.info(f"Processing request for video_id: {video_id}, is_shorts: {is_shorts}, method: {'web_scraping' if request.use_scraping else 'youtube_transcript_api'}")
+        logger.info(f"Processing request for video_id: {video_id}, is_shorts: {is_shorts}")
         
-        # NEW: Use web scraping method
+        # Use the persistent session instead of creating new one each time
         def fetch_transcript():
             try:
-                # Use web scraping instead of youtube-transcript-api
-                transcript_data, language_code, is_generated, transcript_source = fetch_transcript_web_scraping(video_id)
+                # Use the global session pool instead of creating new API instance
+                ytt_api = transcript_pool.get_api()
                 
-                if not transcript_data:
-                    raise ValueError("No transcript data received")
+                # List available transcripts
+                transcript_list = ytt_api.list(video_id)
+                
+                # Try to find a generated or manual English transcript
+                try:
+                    transcript = transcript_list.find_generated_transcript(['en'])
+                    transcript_source = "generated"
+                except:
+                    try:
+                        transcript = transcript_list.find_manually_created_transcript(['en'])
+                        transcript_source = "manual"
+                    except:
+                        raise HTTPException(status_code=404, detail="No English transcript available")
+                
+                # Fetch the transcript object
+                fetched_transcript = transcript.fetch()
+                
+                # Extract metadata from the FetchedTranscript object
+                language_code = fetched_transcript.language_code
+                is_generated = fetched_transcript.is_generated
+                
+                # Convert to list of dicts for compatibility
+                transcript_data = fetched_transcript.to_raw_data()
                 
                 return transcript_data, language_code, is_generated, transcript_source
-                
             except Exception as e:
                 logger.error(f"Transcript fetch error for {video_id}: {str(e)}")
                 raise HTTPException(status_code=500, detail=f"Transcript fetch failed: {str(e)}")
@@ -260,10 +297,10 @@ async def get_transcript(request: TranscriptRequest):
             "segments": segments if request.include_timestamps else None,
             "status": "completed",
             "video_id": video_id,
-            "video_title": "YouTube Video",  # Note: The scraper could provide this from metadata
+            "video_title": "YouTube Video",
             "language_code": language_code,
             "is_generated": is_generated,
-            "service": "web_scraping",
+            "service": "youtube_transcript_api",
             "total_segments": len(segments) if segments else len(transcript_data),
             "total_duration": total_duration,
             "is_shorts": is_shorts,
@@ -280,10 +317,11 @@ async def get_transcript(request: TranscriptRequest):
         logger.error(f"Unexpected error for {video_id if 'video_id' in locals() else 'unknown'}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
 
+# Optional: Add endpoint to check connection pool health
 @app.get("/health")
 def health_check():
     return {
         "status": "healthy",
         "service": "youtube_transcript_api",
-        "method": "web_scraping"
+        "connection_pool": "active"
     }
