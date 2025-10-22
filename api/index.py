@@ -232,31 +232,42 @@ def process_transcript_segments(transcript_data, include_timestamps, timestamp_f
 def read_root():
     return {"message": "YouTube Transcript API"}
 
+# In index.py
+
 @app.post("/transcript")
 async def get_transcript(request: TranscriptRequest):
     try:
         video_id, is_shorts = extract_video_id(str(request.url))
         logger.info(f"Processing request for video_id: {video_id}, is_shorts: {is_shorts}")
         
-        # Use the persistent session instead of creating new one each time
         def fetch_transcript():
             try:
-                # Use the global session pool instead of creating new API instance
                 ytt_api = transcript_pool.get_api()
                 
                 # List available transcripts
                 transcript_list = ytt_api.list(video_id)
                 
-                # Try to find a generated or manual English transcript
+                # Get the first available transcript (any language)
                 try:
-                    transcript = transcript_list.find_generated_transcript(['en'])
-                    transcript_source = "generated"
-                except:
-                    try:
-                        transcript = transcript_list.find_manually_created_transcript(['en'])
-                        transcript_source = "manual"
-                    except:
-                        raise HTTPException(status_code=404, detail="No English transcript available")
+                    # Try to get any generated transcript first
+                    available_transcripts = list(transcript_list._generated_transcripts.values())
+                    if available_transcripts:
+                        transcript = available_transcripts[0]
+                        transcript_source = "generated"
+                    else:
+                        # Fall back to manual transcripts
+                        available_transcripts = list(transcript_list._manually_created_transcripts.values())
+                        if available_transcripts:
+                            transcript = available_transcripts[0]
+                            transcript_source = "manual"
+                        else:
+                            raise HTTPException(status_code=404, detail="No transcripts available for this video")
+                    
+                    logger.info(f"Found transcript in language: {transcript.language_code}")
+                    
+                except Exception as e:
+                    logger.error(f"Error accessing transcripts: {str(e)}")
+                    raise HTTPException(status_code=404, detail="No transcripts available for this video")
                 
                 # Fetch the transcript object
                 fetched_transcript = transcript.fetch()
@@ -269,6 +280,8 @@ async def get_transcript(request: TranscriptRequest):
                 transcript_data = fetched_transcript.to_raw_data()
                 
                 return transcript_data, language_code, is_generated, transcript_source
+            except HTTPException:
+                raise
             except Exception as e:
                 logger.error(f"Transcript fetch error for {video_id}: {str(e)}")
                 raise HTTPException(status_code=500, detail=f"Transcript fetch failed: {str(e)}")
@@ -290,7 +303,7 @@ async def get_transcript(request: TranscriptRequest):
         if not final_text:
             raise HTTPException(status_code=404, detail="Transcript text is empty.")
         
-        logger.info(f"Successfully processed {len(segments) if segments else len(transcript_data)} segments for {video_id}")
+        logger.info(f"Successfully processed {len(segments) if segments else len(transcript_data)} segments for {video_id} (language: {language_code})")
         
         response_data = {
             "text": final_text,
